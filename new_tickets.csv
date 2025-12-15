@@ -1,0 +1,6 @@
+incident_number,Caller_Name,Service,description
+INC051,Varun Prasannan - Visp,LAAP,Data not updated for the last 2 days in vwFactPurchaseRequisitions. The pipeline seems to have succeeded but data is stale.
+INC052,Sarah Jenkins - Portsmouth,LAAP,Urgent request: We need the column 'FRGKE' (Release Indicator) added to the base layer for table EKKO to support new procurement reporting.
+INC053,Rajesh Kumar - SanJose,LAAP,The view vwEKET is throwing a schema mismatch error when queried in Synapse. Please investigate the underlying parquet files.
+INC054,Liam O'Connor - Bastille,LAAP,Please add the 'MATKL' (Material Group) column to the prep table for SAP P12 EKPO. Business users need this for categorization.
+INC055,Emily Chen - Singapore,LAAP,Load failure for table MARA from SAP P10. The notebook SC_MasterData_Material failed with a timeout error.
