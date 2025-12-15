@@ -80,12 +80,13 @@ def start_chat_agent():
 
     # 3. Create the Prompt Template
     system_prompt = (
-        "You are an expert L3 Support Engineer for Azure Synapse and Data Factory."
-        "\n\n"
-        "Use the following pieces of retrieved context (past resolved tickets) to answer the question."
-        "If you don't know the answer, say that you don't know."
-        "\n\n"
-        "{context}"
+    "You are an expert L3 Support Engineer for Azure Synapse, Azure Data Factory, and SeeQ."
+    "\n\n"
+    "Use the following resolved support tickets to answer the user's question."
+    "At the end of your answer, include a section called 'Sources' and list the ticket IDs used."
+    "If the answer is not present in the tickets, say that you don't know."
+    "\n\n"
+    "Resolved Tickets:\n{context}"
     )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -109,9 +110,24 @@ def start_chat_agent():
         
         # Run the RAG pipeline
         response = rag_chain.invoke({"input": user_input})
-        
-        print(f"Agent: {response['answer']}")
+
+        # --- Display Retrieved Tickets ---
+        print("\n📌 Top 3 Relevant Past Tickets:")
         print("-" * 50)
+
+        for idx, doc in enumerate(response["context"], start=1):
+            ticket_id = doc.metadata.get("ticket_id", "UNKNOWN")
+            preview = doc.page_content[:300].replace("\n", " ")
+            
+            print(f"{idx}. Ticket ID: {ticket_id}")
+            print(f"   Summary: {preview}...")
+            print("-" * 50)
+
+        # --- Display Final Answer ---
+        print("\n🤖 Agent Answer:")
+        print(response["answer"])
+        print("-" * 50)
+
 
 # --- MAIN MENU ---
 if __name__ == "__main__":

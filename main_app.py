@@ -1,6 +1,7 @@
 import os
-from dotenv import load_dotenv
+import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
 from langchain_google_genai import (
     GoogleGenerativeAIEmbeddings,
@@ -18,6 +19,7 @@ load_dotenv()
 
 INDEX_NAME = "support-agent-v1"
 TOP_K = 3
+INCIDENT_CSV_PATH = "new_tickets.csv"
 
 # --------------------------------------------------
 # STREAMLIT PAGE CONFIG
@@ -32,7 +34,7 @@ st.title("🤖 L3 Support AI Agent")
 st.caption("Azure Synapse • Azure Data Factory • SeeQ")
 
 # --------------------------------------------------
-# CACHE MODELS (IMPORTANT FOR PERFORMANCE)
+# CACHED LOADERS
 # --------------------------------------------------
 @st.cache_resource
 def load_embeddings():
@@ -54,12 +56,17 @@ def load_llm():
         model="gemini-2.5-flash"
     )
 
+@st.cache_data
+def load_incidents():
+    return pd.read_csv(INCIDENT_CSV_PATH)
+
 # --------------------------------------------------
 # LOAD COMPONENTS
 # --------------------------------------------------
 vectorstore = load_vectorstore()
 retriever = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
 llm = load_llm()
+incidents_df = load_incidents()
 
 # --------------------------------------------------
 # PROMPT
@@ -67,8 +74,8 @@ llm = load_llm()
 system_prompt = (
     "You are an expert L3 Support Engineer for Azure Synapse, "
     "Azure Data Factory, and SeeQ.\n\n"
-    "Use the following resolved support tickets to answer the question.\n"
-    "Always cite the ticket IDs you used.\n"
+    "Use the following resolved support tickets to answer the incident.\n"
+    "Always cite the ticket IDs you used in a section called 'Sources'.\n"
     "If the answer is not present in the tickets, say that you don't know.\n\n"
     "Resolved Tickets:\n{context}"
 )
@@ -87,46 +94,69 @@ question_answer_chain = create_stuff_documents_chain(llm, prompt)
 rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 
 # --------------------------------------------------
-# UI INPUT
+# UI: INCIDENT NUMBER INPUT
 # --------------------------------------------------
-user_query = st.text_input(
-    "💬 Ask a support question",
-    placeholder="Why is my SeeQ connector failing in Synapse?"
+incident_number = st.text_input(
+    "🆘 Enter Incident Number",
+    placeholder="INC051"
 )
 
 # --------------------------------------------------
-# RUN RAG
+# PROCESS INCIDENT
 # --------------------------------------------------
-if user_query:
-    with st.spinner("🔍 Searching past tickets & generating answer..."):
-        response = rag_chain.invoke({"input": user_query})
+if incident_number:
+    incident_row = incidents_df[
+        incidents_df["incident_number"] == incident_number
+    ]
 
-    retrieved_docs = response["context"]
-    answer = response["answer"]
+    if incident_row.empty:
+        st.error("❌ Incident number not found.")
+    else:
+        service = incident_row.iloc[0]["Service"]
+        description = incident_row.iloc[0]["description"]
 
-    # --------------------------------------------------
-    # LAYOUT
-    # --------------------------------------------------
-    col1, col2 = st.columns([1, 1.3])
+        # Auto-generated query
+        generated_query = (
+            f"Service: {service}\n"
+            f"Incident Description: {description}"
+        )
 
-    # ---------------- LEFT: TICKETS ----------------
-    with col1:
-        st.subheader("📌 Top 3 Relevant Tickets")
+        # Show incident details
+        st.info("📄 Incident Details Retrieved")
+        st.markdown(f"**Service:** {service}")
+        st.markdown(f"**Description:** {description}")
 
-        for idx, doc in enumerate(retrieved_docs, start=1):
-            ticket_id = doc.metadata.get("ticket_id", "UNKNOWN")
-            content_preview = doc.page_content[:400]
+        with st.spinner("🔍 Finding similar resolved tickets..."):
+            response = rag_chain.invoke(
+                {"input": generated_query}
+            )
 
-            with st.expander(f"{idx}. Ticket ID: {ticket_id}", expanded=False):
-                st.write(content_preview)
+        retrieved_docs = response["context"]
+        answer = response["answer"]
 
-    # ---------------- RIGHT: ANSWER ----------------
-    with col2:
-        st.subheader("🤖 Agent Answer")
-        st.markdown(answer)
+        # --------------------------------------------------
+        # RESULTS LAYOUT
+        # --------------------------------------------------
+        col1, col2 = st.columns([1, 1.3])
+
+        # ---------------- LEFT: TICKETS ----------------
+        with col1:
+            st.subheader("📌 Top 3 Relevant Past Tickets")
+
+            for idx, doc in enumerate(retrieved_docs, start=1):
+                ticket_id = doc.metadata.get("ticket_id", "UNKNOWN")
+                preview = doc.page_content[:400]
+
+                with st.expander(f"{idx}. Ticket ID: {ticket_id}"):
+                    st.write(preview)
+
+        # ---------------- RIGHT: ANSWER ----------------
+        with col2:
+            st.subheader("🤖 Suggested Resolution")
+            st.markdown(answer)
 
 # --------------------------------------------------
 # FOOTER
 # --------------------------------------------------
 st.markdown("---")
-st.caption("🔐 Powered by Gemini + Pinecone | L3 Support RAG Agent")
+st.caption("🔐 Gemini + Pinecone | L3 Incident Resolution Assistant")
