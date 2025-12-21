@@ -1,9 +1,11 @@
+# This app has the ingestion logic and chat in the terminal using Azure OpenAI and Pinecone
+
 import os
 import time
 from dotenv import load_dotenv
 
 # --- Latest LangChain Imports (Dec 2025 Standard) ---
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
 from langchain_pinecone import PineconeVectorStore
 from langchain_community.document_loaders import CSVLoader
 from langchain_classic.chains import create_retrieval_chain
@@ -15,11 +17,14 @@ from pinecone import Pinecone, ServerlessSpec
 load_dotenv()
 
 # --- CONFIGURATION ---
-INDEX_NAME = "support-agent-v1"
+INDEX_NAME = "support-agent-v2-azure-embeddings"
 CSV_FILE_PATH = "support_tickets.csv"  # Ensure this file exists
 
 # 1. Initialize Gemini Embeddings (Free tier uses 'models/text-embedding-004')
-embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+embeddings = AzureOpenAIEmbeddings(
+    azure_deployment="text-embedding-3-small",
+    api_version="2024-02-15-preview"
+)
 
 # 2. Initialize Pinecone Client
 pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
@@ -38,7 +43,7 @@ def setup_vector_db():
         try:
             pc.create_index(
                 name=INDEX_NAME,
-                dimension=3072,
+                dimension=1536,
                 metric="cosine",
                 spec=ServerlessSpec(cloud="aws", region="us-east-1")
             )
@@ -75,8 +80,13 @@ def start_chat_agent():
     vectorstore = PineconeVectorStore(index_name=INDEX_NAME, embedding=embeddings)
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) # Retrieve top 3 similar tickets
 
-    # 2. Initialize Gemini Pro (LLM)
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+    # 2. Initialize Azure OpenAI(LLM)
+    llm = AzureChatOpenAI(
+    azure_deployment="gpt-4o",
+    api_version="2024-02-15-preview",
+    temperature=0
+    )
+
 
     # 3. Create the Prompt Template
     system_prompt = (

@@ -1,3 +1,5 @@
+# This app will let you directly ask a question regarding your Knowledge Base
+
 import os
 from dotenv import load_dotenv
 import streamlit as st

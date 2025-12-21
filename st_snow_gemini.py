@@ -1,3 +1,5 @@
+# This app will simulate a ServiceNow incident input and resolution using Gemini and Pinecone
+
 import os
 import pandas as pd
 import streamlit as st
