@@ -36,13 +36,7 @@ Install (example)
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-# This repository now includes a pinned `requirements.txt` with versions used
-# in the development virtual environment. If you're reproducing the environment
-# elsewhere, install from the file to get the same package versions:
 python -m pip install -r requirements.txt
-
-# If you already have an activated venv with the required packages, re-install
-# is unnecessary. To inspect installed versions instead, run:
 python -m pip show streamlit pandas python-dotenv pinecone langchain-google-genai
 ```
 
