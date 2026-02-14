@@ -4,3 +4,5 @@ INC052,Sarah Jenkins - Portsmouth,LAAP,Urgent request: We need the column 'FRGKE
 INC053,Rajesh Kumar - SanJose,LAAP,The view vwEKET is throwing a schema mismatch error when queried in Synapse. Please investigate the underlying parquet files.
 INC054,Liam O'Connor - Bastille,LAAP,Please add the 'MATKL' (Material Group) column to the prep table for SAP P12 EKPO. Business users need this for categorization.
 INC055,Emily Chen - Singapore,LAAP,Load failure for table MARA from SAP P10. The notebook SC_MasterData_Material failed with a timeout error.
+INC056,Olivia Brown - Visp,LAAP,Please join the ABTEZ field from CABNT table of SAP into factInvoice table. This is required for tax reporting.
+INC057,Noah Wilson - Portugal,Seeq, I am from Portugal location and I am unable to access Seeq platform. It shows an error "Access Denied".

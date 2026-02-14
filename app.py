@@ -1,4 +1,5 @@
 # Streamlit app: L3 Support AI Agent using Azure OpenAI + Azure AI Search
+# Incremental wiring: intent-based routing + notebook retrieval (safe, non-breaking)
 
 import os
 import pandas as pd
@@ -6,11 +7,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from typing import Any, List
 
-
 from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
-from langchain_classic.chains import create_retrieval_chain
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import Field, ConfigDict
@@ -19,6 +16,14 @@ from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.models import VectorizedQuery
 
+# NEW IMPORTS
+from rag.intent_router import detect_intent
+from rag.intent import QueryIntent
+from retrievers.notebook_retriever import AzureNotebookRetriever
+
+# --------------------------------------------------
+# CSV LOADERS
+# --------------------------------------------------
 @st.cache_data
 def load_support_tickets():
     return pd.read_csv("support_tickets.csv")
@@ -30,8 +35,8 @@ def load_new_tickets():
 try:
     support_tickets_df = load_support_tickets()
     new_tickets_df = load_new_tickets()
-except Exception as e:
-    st.error("Failed to load support_tickets.csv")
+except Exception:
+    st.error("Failed to load CSV files")
     st.stop()
 
 # --------------------------------------------------
@@ -39,13 +44,20 @@ except Exception as e:
 # --------------------------------------------------
 load_dotenv()
 
-INDEX_NAME = "support-agent-v2-azure-embeddings"
+TICKET_INDEX = "support-agent-v2-azure-embeddings"
+NOTEBOOK_INDEX = "engineering-notebooks-index"
 TOP_K = 3
 INCIDENT_CSV_PATH = "new_tickets.csv"
 
 # --------------------------------------------------
 # STREAMLIT PAGE CONFIG
 # --------------------------------------------------
+st.set_page_config(
+    page_title="L3 Support AI Agent",
+    page_icon="🤖",
+    layout="wide"
+)
+
 st.sidebar.title("📌 Navigation")
 
 page = st.sidebar.radio(
@@ -57,12 +69,9 @@ page = st.sidebar.radio(
     ]
 )
 
-st.set_page_config(
-    page_title="L3 Support AI Agent",
-    page_icon="🤖",
-    layout="wide"
-)
-
+# ==================================================
+# MAIN APP
+# ==================================================
 if page == "🤖 AI Support Agent":
     st.title("🤖 L3 Support AI Agent")
     st.caption("Azure Synapse • Azure Data Factory • SeeQ")
@@ -86,10 +95,18 @@ if page == "🤖 AI Support Agent":
         )
 
     @st.cache_resource
-    def load_search_client():
+    def load_ticket_search_client():
         return SearchClient(
             endpoint=os.getenv("AZURE_SEARCH_ENDPOINT"),
-            index_name=INDEX_NAME,
+            index_name=TICKET_INDEX,
+            credential=AzureKeyCredential(os.getenv("AZURE_SEARCH_API_KEY"))
+        )
+
+    @st.cache_resource
+    def load_notebook_search_client():
+        return SearchClient(
+            endpoint=os.getenv("AZURE_SEARCH_ENDPOINT"),
+            index_name=NOTEBOOK_INDEX,
             credential=AzureKeyCredential(os.getenv("AZURE_SEARCH_API_KEY"))
         )
 
@@ -98,16 +115,14 @@ if page == "🤖 AI Support Agent":
         return pd.read_csv(INCIDENT_CSV_PATH)
 
     # --------------------------------------------------
-    # AZURE SEARCH RETRIEVER (LangChain-compatible)
+    # TICKET RETRIEVER
     # --------------------------------------------------
     class AzureSearchRetriever(BaseRetriever):
         search_client: Any = Field(...)
         embeddings: Any = Field(...)
         k: int = Field(default=3)
 
-        model_config = ConfigDict(
-            arbitrary_types_allowed=True
-        )
+        model_config = ConfigDict(arbitrary_types_allowed=True)
 
         def _get_relevant_documents(self, query: str) -> List[Document]:
             query_vector = self.embeddings.embed_query(query)
@@ -124,58 +139,36 @@ if page == "🤖 AI Support Agent":
                 select=["ticket_id", "content"]
             )
 
-            docs = []
-            for r in results:
-                docs.append(
-                    Document(
-                        page_content=r["content"],
-                        metadata={"ticket_id": r["ticket_id"]}
-                    )
+            return [
+                Document(
+                    page_content=r["content"],
+                    metadata={"ticket_id": r["ticket_id"]}
                 )
-
-            return docs
+                for r in results
+            ]
 
     # --------------------------------------------------
     # LOAD COMPONENTS
     # --------------------------------------------------
     embeddings = load_embeddings()
     llm = load_llm()
-    search_client = load_search_client()
-    incidents_df = load_incidents()
 
-    retriever = AzureSearchRetriever(
-        search_client=search_client,
+    ticket_retriever = AzureSearchRetriever(
+        search_client=load_ticket_search_client(),
         embeddings=embeddings,
         k=TOP_K
     )
 
-    # --------------------------------------------------
-    # PROMPT
-    # --------------------------------------------------
-    system_prompt = (
-        "You are an expert L3 Support Engineer for Azure Synapse, "
-        "Azure Data Factory, and SeeQ.\n\n"
-        "Use the following resolved support tickets to answer the incident.\n"
-        "Always cite the ticket IDs you used in a section called 'Sources'.\n"
-        "If the answer is not present in the tickets, say that you don't know.\n\n"
-        "Resolved Tickets:\n{context}"
+    notebook_retriever = AzureNotebookRetriever(
+        search_client=load_notebook_search_client(),
+        embeddings=embeddings,
+        k=TOP_K
     )
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            ("human", "{input}")
-        ]
-    )
+    incidents_df = load_incidents()
 
     # --------------------------------------------------
-    # CHAINS
-    # --------------------------------------------------
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
-
-    # --------------------------------------------------
-    # QUERY MODE SELECTION
+    # QUERY MODE
     # --------------------------------------------------
     query_mode = st.radio(
         "🔎 How would you like to search?",
@@ -183,9 +176,6 @@ if page == "🤖 AI Support Agent":
         horizontal=True
     )
 
-    # --------------------------------------------------
-    # INPUT BOX (shared)
-    # --------------------------------------------------
     user_input = st.text_input(
         "💬 Enter your query",
         placeholder=(
@@ -196,7 +186,7 @@ if page == "🤖 AI Support Agent":
     )
 
     # --------------------------------------------------
-    # PROCESS INCIDENT
+    # PROCESS QUERY
     # --------------------------------------------------
     if user_input:
         if query_mode == "Incident Number":
@@ -211,72 +201,108 @@ if page == "🤖 AI Support Agent":
             service = incident_row.iloc[0]["Service"]
             description = incident_row.iloc[0]["description"]
 
-            generated_query = (
-                f"Service: {service}\n"
-                f"Incident Description: {description}"
-            )
+            final_query = f"Service: {service}\nIncident Description: {description}"
 
             st.info("📄 Incident Details Retrieved")
             st.markdown(f"**Service:** {service}")
             st.markdown(f"**Description:** {description}")
 
-            final_query = generated_query
-
         else:
-            # Natural language query mode
-            st.info("💬 Processing natural language query")
             final_query = user_input
 
-        with st.spinner("🔍 Finding similar resolved tickets..."):
-            response = rag_chain.invoke({"input": final_query})
+        intent = detect_intent(final_query, llm)
 
-        retrieved_docs = response["context"]
-        answer = response["answer"]
+        ticket_docs = []
+        notebook_docs = []
+
+        if intent in {
+            QueryIntent.ACCESS_ISSUE,
+            QueryIntent.SCHEMA_CHANGE,
+            QueryIntent.GENERAL
+        }:
+            ticket_docs = ticket_retriever.invoke(final_query)
+
+        if intent in {
+            QueryIntent.SCHEMA_CHANGE,
+            QueryIntent.PIPELINE_LOGIC
+        }:
+            notebook_docs = notebook_retriever.invoke(final_query)
 
         # --------------------------------------------------
-        # RESULTS LAYOUT
+        # BUILD CONTEXT
+        # --------------------------------------------------
+        context_blocks = []
+
+        if ticket_docs:
+            context_blocks.append("### Resolved Support Tickets")
+            for d in ticket_docs:
+                context_blocks.append(
+                    f"- Ticket {d.metadata.get('ticket_id')}:\n{d.page_content}"
+                )
+
+        if notebook_docs:
+            context_blocks.append("\n### Engineering Notebooks")
+            for d in notebook_docs:
+                context_blocks.append(
+                    f"- Notebook {d.metadata['notebook_name']} "
+                    f"(Cell {d.metadata['cell_index']}):\n{d.page_content}"
+                )
+
+        context = "\n\n".join(context_blocks)
+
+        # --------------------------------------------------
+        # LLM CALL
+        # --------------------------------------------------
+        system_prompt = f"""
+You are an expert L3 Support Engineer and Data Platform Engineer.
+
+Use the provided context to answer the user's request.
+Always list sources at the end. Please remember, if you are working with notebooks by any chance, do not assume any joins will be made by the user. Rather mention how to make the join too.
+
+Context:
+{context}
+"""
+
+        response = llm.invoke([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": final_query}
+        ])
+
+        # --------------------------------------------------
+        # UI OUTPUT
         # --------------------------------------------------
         col1, col2 = st.columns([1, 1.3])
 
-        # ---------------- LEFT: TICKETS ----------------
         with col1:
-            st.subheader("📌 Top Relevant Past Tickets")
+            if ticket_docs:
+                st.subheader("📌 Relevant Support Tickets")
+                for d in ticket_docs:
+                    with st.expander(d.metadata.get("ticket_id")):
+                        st.write(d.page_content)
 
-            for idx, doc in enumerate(retrieved_docs, start=1):
-                ticket_id = doc.metadata.get("ticket_id", "UNKNOWN")
-                preview = doc.page_content[:400]
+            if notebook_docs:
+                st.subheader("📓 Relevant Engineering Notebooks")
+                for d in notebook_docs:
+                    with st.expander(
+                        f"{d.metadata['notebook_name']} "
+                        f"(Cell {d.metadata['cell_index']})"
+                    ):
+                        st.code(d.page_content, language="python")
 
-                with st.expander(f"{idx}. Ticket ID: {ticket_id}"):
-                    st.write(preview)
-
-        # ---------------- RIGHT: ANSWER ----------------
         with col2:
             st.subheader("🤖 Suggested Resolution")
-            st.markdown(answer)
+            st.markdown(response.content)
 
+# ==================================================
+# OTHER PAGES
+# ==================================================
 elif page == "📂 Resolved Tickets":
     st.title("📂 Resolved Support Tickets")
-    st.caption("Historical tickets used by the AI agent")
-
-    st.dataframe(
-        support_tickets_df,
-        use_container_width=True,
-        height=700
-    )
+    st.dataframe(support_tickets_df, use_container_width=True, height=700)
 
 elif page == "🆕 New Incidents":
     st.title("🆕 Incoming Incidents")
-    st.caption("Live incidents from ServiceNow / CSV")
+    st.dataframe(new_tickets_df, use_container_width=True, height=700)
 
-    st.dataframe(
-        new_tickets_df,
-        use_container_width=True,
-        height=700
-    )
-
-    # --------------------------------------------------
-    # FOOTER
-    # --------------------------------------------------
 st.markdown("---")
 st.caption("🔐 Azure OpenAI + Azure AI Search | L3 Incident Resolution Assistant")
-
